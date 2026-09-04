@@ -1,0 +1,10 @@
+{
+  "environment": "demo",
+  "market_tickers": [
+    "REPLACE-WITH-A-KALSHI-TENNIS-TICKER"
+  ],
+  "output": "data/events.jsonl",
+  "tennis_events": "samples/tennis.ndjson",
+  "replay_delay_ms": 250,
+  "channel_capacity": 8192
+}
