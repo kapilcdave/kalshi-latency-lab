@@ -1,0 +1,12 @@
+{
+  "input": "samples/capture.jsonl",
+  "output": "data/reactions.csv",
+  "ticker": "KXTENNIS-EXAMPLE",
+  "match_id": "example-match",
+  "horizon_ms": 5000,
+  "min_touch_move_fp": 1,
+  "max_book_age_ms": 2000,
+  "event_kinds": ["point"],
+  "cost_buffer_fp": 100,
+  "min_edge_fp": 100
+}

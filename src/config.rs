@@ -32,6 +32,13 @@ impl Environment {
             Self::Demo => "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2",
         }
     }
+
+    pub const fn rest_url(self) -> &'static str {
+        match self {
+            Self::Production => "https://external-api.kalshi.com/trade-api/v2",
+            Self::Demo => "https://external-api.demo.kalshi.co/trade-api/v2",
+        }
+    }
 }
 
 impl Config {

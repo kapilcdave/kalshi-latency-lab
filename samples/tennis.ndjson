@@ -1,3 +1,3 @@
-{"source_ts_ns":1788541200000000000,"match_id":"example-match","seq":1,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["15","0"]}
-{"source_ts_ns":1788541201000000000,"match_id":"example-match","seq":2,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["30","0"]}
-{"source_ts_ns":1788541202000000000,"match_id":"example-match","seq":3,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["40","0"]}
+{"source_ts_ns":1788541200000000000,"match_id":"example-match","seq":1,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["15","0"],"fair_yes_fp":5200}
+{"source_ts_ns":1788541201000000000,"match_id":"example-match","seq":2,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["30","0"],"fair_yes_fp":5400}
+{"source_ts_ns":1788541202000000000,"match_id":"example-match","seq":3,"event":"point","server":"a","sets":[0,0],"games":[0,0],"points":["40","0"],"fair_yes_fp":5800}

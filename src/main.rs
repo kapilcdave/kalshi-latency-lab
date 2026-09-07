@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move { record::run_writer(&writer_path, records_rx).await });
     let mut kalshi = tokio::spawn(kalshi::run(
         config.environment.websocket_url(),
+        config.environment.rest_url(),
         config.market_tickers,
         auth,
         clock.clone(),

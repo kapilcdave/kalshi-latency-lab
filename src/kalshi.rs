@@ -24,18 +24,25 @@ use crate::{
 
 pub async fn run(
     websocket_url: &'static str,
+    rest_url: &'static str,
     tickers: Vec<String>,
     auth: Auth,
     clock: Clock,
     records: mpsc::Sender<Record>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build Kalshi HTTP client")?;
     let mut backoff = Duration::from_millis(250);
     while !*shutdown.borrow() {
         match connect_once(
             websocket_url,
+            rest_url,
             &tickers,
             &auth,
+            &http,
             &clock,
             &records,
             shutdown.clone(),
@@ -63,10 +70,13 @@ pub async fn run(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connect_once(
     websocket_url: &str,
+    rest_url: &str,
     tickers: &[String],
     auth: &Auth,
+    http: &reqwest::Client,
     clock: &Clock,
     records: &mpsc::Sender<Record>,
     mut shutdown: watch::Receiver<bool>,
@@ -89,28 +99,58 @@ async fn connect_once(
         result = connect_async(request) => result.context("Kalshi WebSocket handshake failed")?,
         _ = shutdown.changed() => return Ok(()),
     };
-    tokio::select! {
-        result = socket.send(Message::Text(
-            json!({
-                "id": 1,
-                "cmd": "subscribe",
-                "params": {
-                    "channels": ["orderbook_delta", "trade"],
-                    "market_tickers": tickers,
-                    "use_yes_price": true
-                }
-            })
-            .to_string()
-            .into(),
-        )) => result.context("failed to send Kalshi subscription")?,
-        _ = shutdown.changed() => return Ok(()),
-    }
     write_control(
         records,
         clock,
         "connection_open",
         json!({"url": websocket_url}),
     )?;
+    for ticker in tickers {
+        let response = tokio::select! {
+            result = http.get(format!("{rest_url}/markets/{ticker}")).send() => {
+                result.with_context(|| format!("failed to fetch initial status for {ticker}"))?
+            },
+            _ = shutdown.changed() => return Ok(()),
+        }
+        .error_for_status()
+        .with_context(|| format!("initial market status failed for {ticker}"))?;
+        let payload: Value = tokio::select! {
+            result = response.json() => {
+                result.with_context(|| format!("invalid initial market status for {ticker}"))?
+            },
+            _ = shutdown.changed() => return Ok(()),
+        };
+        let (recv_unix_ns, recv_mono_ns) = clock.stamp()?;
+        write_record(
+            records,
+            Record {
+                run_id: clock.run_id(),
+                source: "kalshi",
+                kind: "market_status_snapshot".into(),
+                recv_unix_ns,
+                recv_mono_ns,
+                source_ts_ns: None,
+                venue_ts_ms: None,
+                ticker: Some(ticker.clone()),
+                sid: None,
+                seq: None,
+                book: None,
+                payload,
+            },
+        )?;
+    }
+    tokio::select! {
+        result = socket.send(Message::Text(
+            market_subscription(tickers).into(),
+        )) => result.context("failed to send Kalshi subscription")?,
+        _ = shutdown.changed() => return Ok(()),
+    }
+    tokio::select! {
+        result = socket.send(Message::Text(
+            lifecycle_subscription().into(),
+        )) => result.context("failed to send Kalshi lifecycle subscription")?,
+        _ = shutdown.changed() => return Ok(()),
+    }
 
     let mut sequences = HashMap::<u64, u64>::new();
     let mut books = HashMap::<String, Book>::new();
@@ -139,11 +179,13 @@ async fn connect_once(
 
         if matches!(
             kind.as_str(),
-            "orderbook_snapshot" | "orderbook_delta" | "trade"
+            "orderbook_snapshot"
+                | "orderbook_delta"
+                | "trade"
+                | "market_lifecycle_v2"
+                | "event_lifecycle"
+                | "event_fee_update"
         ) {
-            let ticker = ticker
-                .as_deref()
-                .with_context(|| format!("{kind} is missing market_ticker"))?;
             let sid = sid.with_context(|| format!("{kind} is missing sid"))?;
             let seq = seq.with_context(|| format!("{kind} is missing seq"))?;
             if let Err((expected, received)) = observe_sequence(&mut sequences, sid, seq) {
@@ -157,7 +199,7 @@ async fn connect_once(
                         recv_mono_ns,
                         source_ts_ns: None,
                         venue_ts_ms: message.get("ts_ms").and_then(Value::as_u64),
-                        ticker: Some(ticker.to_owned()),
+                        ticker: ticker.clone(),
                         sid: Some(sid),
                         seq: Some(seq),
                         book: None,
@@ -166,6 +208,22 @@ async fn connect_once(
                 )?;
                 bail!("sequence gap on sid {sid}: expected {expected}, received {received}");
             }
+        }
+
+        if matches!(
+            kind.as_str(),
+            "orderbook_snapshot" | "orderbook_delta" | "trade"
+        ) && ticker.is_none()
+        {
+            bail!("{kind} is missing market_ticker");
+        }
+        if matches!(kind.as_str(), "event_lifecycle" | "event_fee_update")
+            || (kind == "market_lifecycle_v2"
+                && !ticker
+                    .as_ref()
+                    .is_some_and(|ticker| tickers.contains(ticker)))
+        {
+            continue;
         }
 
         let touch = match (kind.as_str(), ticker.as_deref()) {
@@ -222,6 +280,30 @@ fn observe_sequence(
     }
 }
 
+fn market_subscription(tickers: &[String]) -> String {
+    json!({
+        "id": 1,
+        "cmd": "subscribe",
+        "params": {
+            "channels": ["orderbook_delta", "trade"],
+            "market_tickers": tickers,
+            "use_yes_price": true
+        }
+    })
+    .to_string()
+}
+
+fn lifecycle_subscription() -> String {
+    json!({
+        "id": 2,
+        "cmd": "subscribe",
+        "params": {
+            "channels": ["market_lifecycle_v2"]
+        }
+    })
+    .to_string()
+}
+
 fn write_control(
     records: &mpsc::Sender<Record>,
     clock: &Clock,
@@ -258,22 +340,25 @@ fn write_record(records: &mpsc::Sender<Record>, record: Record) -> Result<()> {
 mod tests {
     use std::collections::HashMap;
 
-    use super::observe_sequence;
+    use super::{lifecycle_subscription, market_subscription, observe_sequence};
     use serde_json::json;
 
     #[test]
     fn subscription_uses_explicit_yes_axis() {
-        let tickers = ["TEST-TICKER"];
-        let message = json!({
-            "id": 1,
-            "cmd": "subscribe",
-            "params": {
-                "channels": ["orderbook_delta", "trade"],
-                "market_tickers": tickers,
-                "use_yes_price": true
-            }
-        });
+        let tickers = ["TEST-TICKER".to_owned()];
+        let message: serde_json::Value =
+            serde_json::from_str(&market_subscription(&tickers)).unwrap();
         assert_eq!(message["params"]["use_yes_price"], true);
+    }
+
+    #[test]
+    fn lifecycle_subscription_has_no_unsupported_market_filter() {
+        let message: serde_json::Value = serde_json::from_str(&lifecycle_subscription()).unwrap();
+        assert_eq!(
+            message["params"]["channels"],
+            json!(["market_lifecycle_v2"])
+        );
+        assert!(message["params"].get("market_tickers").is_none());
     }
 
     #[test]

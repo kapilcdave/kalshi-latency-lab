@@ -9,6 +9,7 @@ description = "A low-overhead Kalshi and live-sports latency recorder"
 anyhow = "1.0"
 base64 = "0.22"
 futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
